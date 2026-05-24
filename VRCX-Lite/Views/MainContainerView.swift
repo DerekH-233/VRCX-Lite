@@ -481,17 +481,17 @@ final class AppState {
         }
 
         // Preload data for feed (best-effort parallel)
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask {
-                do { friends = try await api.fetchFriends() }
+        await withTaskGroup(of: Void.self) { [self] group in
+            group.addTask { [self] in
+                do { self.friends = try await self.api.fetchFriends() }
                 catch { /* preload failure is non-critical */ }
             }
-            group.addTask {
-                do { notifications = try await api.fetchNotifications() }
+            group.addTask { [self] in
+                do { self.notifications = try await self.api.fetchNotifications() }
                 catch { /* preload failure is non-critical */ }
             }
-            group.addTask {
-                do { worlds = try await api.fetchActiveWorlds() }
+            group.addTask { [self] in
+                do { self.worlds = try await self.api.fetchActiveWorlds() }
                 catch { /* preload failure is non-critical */ }
             }
         }
