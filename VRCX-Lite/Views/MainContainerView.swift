@@ -1683,29 +1683,22 @@ struct FriendDetailView: View {
         detailError = nil
         let api = VRChatAPIClient.shared
 
-        async let userResult: () = loadUser(api)
-        async let noteResult: () = loadNote(api)
-
-        _ = await (userResult, noteResult)
-
-        isLoadingDetail = false
-    }
-
-    private func loadUser(_ api: VRChatAPIClient) async {
+        // Load user profile
         do {
             detailedUser = try await api.fetchUser(userID: friend.id)
         } catch {
             detailError = error.localizedDescription
         }
-    }
 
-    private func loadNote(_ api: VRChatAPIClient) async {
+        // Load note (best-effort, may not exist)
         do {
             let note = try await api.fetchUserNote(userID: friend.id)
             userNote = note.note
         } catch {
-            // Notes may not be available or may fail silently
+            // Notes may not be available; silently skip
         }
+
+        isLoadingDetail = false
     }
 
     private func statCell(icon: String, label: String, value: String) -> some View {

@@ -34,6 +34,7 @@ jobs:
       # ── 编译 (无签名) ──
       - name: Build (Unsigned)
         run: |
+          set -o pipefail
           xcodebuild build \
             -project "$PROJECT" \
             -scheme "$SCHEME" \
@@ -44,7 +45,7 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             ONLY_ACTIVE_ARCH=NO \
-            | tee xcodebuild.log
+            2>&1 | tee xcodebuild.log
 
       # ── 定位 .app ──
       - name: Locate .app
