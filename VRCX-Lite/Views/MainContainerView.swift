@@ -132,7 +132,6 @@ struct MainContainerView: View {
                     compactLayout
                 }
             }
-            .background(.ultraThinMaterial)
 
             // ── Error Banner ──
             if let error = appState.errorMessage {
@@ -190,7 +189,7 @@ struct MainContainerView: View {
                 NavigationStack {
                     sectionView(for: section, isCompact: true)
                         .navigationTitle(section.label)
-                        .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
+                        .navigationBarTitleDisplayMode(.large)
                         .toolbar {
                             ToolbarItem(placement: .topBarTrailing) {
                                 if !appState.isLoggedIn {
@@ -198,7 +197,7 @@ struct MainContainerView: View {
                                         HapticManager.light()
                                         appState.showLoginSheet = true
                                     } label: {
-                                        Text("登录").fontWeight(.semibold)
+                                        Image(systemName: "person.crop.circle.badge.plus")
                                     }
                                 }
                             }
@@ -2654,8 +2653,7 @@ struct VRCX_LiteApp: App {
         WindowGroup {
             MainContainerView()
                 .environment(appState)
-                .background(.ultraThinMaterial)
-                .preferredColorScheme(.dark)
+                .tint(.accentColor)
         }
     }
 }
