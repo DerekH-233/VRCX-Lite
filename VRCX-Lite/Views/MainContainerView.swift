@@ -37,28 +37,53 @@ enum FriendStatusColor {
 // MARK: - App Navigation Items
 
 enum AppSection: String, CaseIterable, Identifiable {
+    case home
     case friends
-    case notifications
     case worlds
-    case settings
+    case memories
+    case profile
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
-        case .friends:       return "好友"
-        case .notifications: return "通知"
-        case .worlds:        return "世界"
-        case .settings:      return "设置"
+        case .home:      return "首页"
+        case .friends:   return "好友"
+        case .worlds:    return "世界"
+        case .memories:  return "回忆"
+        case .profile:   return "我的"
         }
     }
 
     var systemImage: String {
         switch self {
-        case .friends:       return "person.2"
-        case .notifications: return "bell.badge"
-        case .worlds:        return "globe.americas"
-        case .settings:      return "gearshape"
+        case .home:      return "house"
+        case .friends:   return "person.2"
+        case .worlds:    return "globe.americas"
+        case .memories:  return "clock.arrow.2.circlepath"
+        case .profile:   return "person.crop.circle"
+        }
+    }
+}
+
+// MARK: - Activity Feed Item
+
+enum ActivityItem: Identifiable, Hashable {
+    case friendOnline(Friend)
+    case friendActive(Friend)
+    case friendInWorld(Friend, String)
+    case friendRequest(VRCNotification)
+    case invite(VRCNotification)
+    case worldPopular(World)
+
+    var id: String {
+        switch self {
+        case .friendOnline(let f):    return "online-\(f.id)"
+        case .friendActive(let f):    return "active-\(f.id)"
+        case .friendInWorld(let f, _): return "inworld-\(f.id)"
+        case .friendRequest(let n):   return "fr-\(n.id)"
+        case .invite(let n):          return "inv-\(n.id)"
+        case .worldPopular(let w):   return "popw-\(w.id)"
         }
     }
 }
@@ -87,7 +112,7 @@ struct MainContainerView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
-    @State private var selectedSection: AppSection = .friends
+    @State private var selectedSection: AppSection = .home
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     /// Computed binding because @Environment Observable doesn't support $ prefix.
@@ -182,7 +207,7 @@ struct MainContainerView: View {
                 .tabItem {
                     Label(section.label, systemImage: section.systemImage)
                 }
-                .badge(section == .notifications ? appState.unreadNotificationCount : 0)
+                .badge(section == .home ? appState.unreadNotificationCount : 0)
                 .tag(section)
             }
         }
@@ -246,7 +271,7 @@ struct MainContainerView: View {
                             Label(section.label, systemImage: section.systemImage)
                                 .foregroundStyle(selectedSection == section ? .primary : .secondary)
                             Spacer()
-                            if section == .notifications, appState.unreadNotificationCount > 0 {
+                            if section == .home, appState.unreadNotificationCount > 0 {
                                 Text("\(appState.unreadNotificationCount)")
                                     .font(.caption2).fontWeight(.bold)
                                     .foregroundStyle(.white)
@@ -310,14 +335,16 @@ struct MainContainerView: View {
     @ViewBuilder
     private func sectionView(for section: AppSection, isCompact: Bool) -> some View {
         switch section {
+        case .home:
+            HomeView(isCompact: isCompact)
         case .friends:
             FriendsListView(isCompact: isCompact)
-        case .notifications:
-            NotificationsView(isCompact: isCompact)
         case .worlds:
             WorldsView(isCompact: isCompact)
-        case .settings:
-            SettingsView()
+        case .memories:
+            MemoriesView(isCompact: isCompact)
+        case .profile:
+            ProfileView()
         }
     }
 
@@ -361,6 +388,45 @@ final class AppState {
 
     private let api = VRChatAPIClient.shared
 
+    // MARK: Feed
+
+    var feedItems: [ActivityItem] = []
+
+    /// Refresh the home feed from current friends, notifications, and worlds data.
+    func refreshFeed() {
+        var items: [ActivityItem] = []
+
+        // Online friends
+        for friend in onlineFriends {
+            let status = friend.status ?? friend.state ?? "online"
+            if status == "join me" || status == "active" {
+                items.append(.friendActive(friend))
+            } else if let loc = friend.location, !loc.isEmpty, loc != "offline", loc != "private" {
+                items.append(.friendInWorld(friend, loc))
+            } else {
+                items.append(.friendOnline(friend))
+            }
+        }
+
+        // Recent notifications as activity
+        for notif in notifications.prefix(10) {
+            if notif.type == "friendRequest" {
+                items.append(.friendRequest(notif))
+            } else if notif.type == "invite" {
+                items.append(.invite(notif))
+            }
+        }
+
+        // World recommendations
+        let popular = worlds.sorted { ($0.occupants ?? 0) > ($1.occupants ?? 0) }.prefix(3)
+        for world in popular where (world.occupants ?? 0) > 0 {
+            items.append(.worldPopular(world))
+        }
+
+        // Sort: most recent/active first
+        feedItems = Array(items.prefix(30))
+    }
+
     // MARK: Computed Properties
 
     var unreadNotificationCount: Int {
@@ -390,6 +456,10 @@ final class AppState {
         notifications.filter { $0.type == "invite" || $0.type == "requestInvite" }
     }
 
+    var favoriteFriends: [Friend] {
+        friends.filter { $0.isFavorite == true }
+    }
+
     // MARK: Session Restoration
 
     func restoreSessionIfPossible() async {
@@ -401,14 +471,31 @@ final class AppState {
             currentUser = user
             isLoggedIn = true
         } catch VRChatAPIError.notAuthenticated {
-            // No saved session — user must log in manually; not an error.
+            return
         } catch VRChatAPIError.sessionExpired {
-            // Session expired — clear and show login.
             await api.logout()
+            return
         } catch {
-            // Network or other transient error — user can retry.
             errorMessage = error.localizedDescription
+            return
         }
+
+        // Preload data for feed (best-effort parallel)
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask {
+                do { friends = try await api.fetchFriends() }
+                catch { /* preload failure is non-critical */ }
+            }
+            group.addTask {
+                do { notifications = try await api.fetchNotifications() }
+                catch { /* preload failure is non-critical */ }
+            }
+            group.addTask {
+                do { worlds = try await api.fetchActiveWorlds() }
+                catch { /* preload failure is non-critical */ }
+            }
+        }
+        refreshFeed()
     }
 
     func login(username: String, password: String) async throws -> CurrentUser {
@@ -1702,45 +1789,582 @@ struct InstanceDetailView: View {
     }
 }
 
-// MARK: - Settings View
+// MARK: - Home View
 
-struct SettingsView: View {
+struct HomeView: View {
+    @Environment(AppState.self) private var appState
+    let isCompact: Bool
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                if !appState.isLoggedIn {
+                    // ── Not Logged In ──
+                    VStack(spacing: 16) {
+                        Image(systemName: "person.crop.circle.badge.questionmark")
+                            .font(.system(size: 48)).foregroundStyle(.secondary)
+                        Text("欢迎使用 VRCX-Lite").font(.title2.bold())
+                        Text("登录 VRChat 以查看好友动态、世界推荐和社交回忆")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                        Button {
+                            HapticManager.medium()
+                            appState.showLoginSheet = true
+                        } label: {
+                            Label("登录 VRChat", systemImage: "arrow.right.circle.fill")
+                                .frame(maxWidth: 200)
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .padding(.top, 40)
+                    .frame(maxWidth: .infinity)
+                } else {
+                    // ── My Status Card ──
+                    if let user = appState.currentUser {
+                        statusCard(user: user)
+                    }
+
+                    // ── Quick Actions ──
+                    quickActions
+
+                    // ── Online Friends Snapshot ──
+                    if !appState.onlineFriends.isEmpty {
+                        onlineFriendsStrip
+                    }
+
+                    // ── Activity Feed ──
+                    if !appState.feedItems.isEmpty {
+                        feedSection
+                    } else {
+                        ProgressView("加载动态…")
+                            .padding()
+                    }
+
+                    // ── Popular Worlds ──
+                    if !appState.worlds.isEmpty {
+                        worldRecommendations
+                    }
+                }
+            }
+            .padding(.bottom, 32)
+        }
+        .refreshable {
+            await refreshAll()
+        }
+        .task {
+            if appState.isLoggedIn && appState.feedItems.isEmpty {
+                await refreshAll()
+            }
+        }
+        .if(isCompact) { view in
+            view.navigationDestination(for: DetailContent.self) { detail in
+                DetailResolver(detail: detail)
+            }
+        }
+    }
+
+    // MARK: Status Card
+
+    private func statusCard(user: CurrentUser) -> some View {
+        HStack(spacing: 12) {
+            AvatarImage(url: user.userIcon, size: 52)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(user.displayName ?? user.username ?? "VRChat 用户")
+                    .font(.headline)
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(FriendStatusColor.color(state: user.state, status: user.status))
+                        .frame(width: 8, height: 8)
+                    Text(FriendStatusColor.label(state: user.state, status: user.status))
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
+                if let bio = user.bio, !bio.isEmpty {
+                    Text(bio).font(.caption).foregroundStyle(.tertiary).lineLimit(1)
+                }
+            }
+
+            Spacer()
+
+            VStack(spacing: 4) {
+                Text("\(appState.friends.count)").font(.title3.bold())
+                Text("好友").font(.caption2).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+        }
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .padding(.horizontal)
+    }
+
+    // MARK: Quick Actions
+
+    private var quickActions: some View {
+        HStack(spacing: 10) {
+            QuickActionCard(
+                icon: "person.fill.badge.plus", label: "好友请求",
+                count: appState.friendRequests.count, color: .orange
+            ) {
+                HapticManager.light()
+                // filtered to friend requests view
+            }
+            QuickActionCard(
+                icon: "envelope.fill", label: "邀请",
+                count: appState.invites.count, color: .blue
+            ) {
+                HapticManager.light()
+            }
+            QuickActionCard(
+                icon: "star.fill", label: "收藏好友",
+                count: appState.favoriteFriends.count, color: .yellow
+            ) {
+                HapticManager.light()
+            }
+            QuickActionCard(
+                icon: "clock.arrow.2.circlepath", label: "回忆", count: 0, color: .purple
+            ) {
+                HapticManager.light()
+            }
+        }
+        .padding(.horizontal)
+    }
+
+    // MARK: Online Friends Strip
+
+    private var onlineFriendsStrip: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("在线好友").font(.subheadline.bold())
+                Spacer()
+                Text("\(appState.onlineFriends.count) 人在线")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(appState.onlineFriends.prefix(20)) { friend in
+                        VStack(spacing: 4) {
+                            AvatarImage(url: friend.userIcon, size: 48)
+
+                            Text(friend.displayName ?? friend.username ?? "?")
+                                .font(.caption2).lineLimit(1)
+                                .frame(width: 54)
+
+                            Circle()
+                                .fill(FriendStatusColor.color(state: friend.state, status: friend.status))
+                                .frame(width: 6, height: 6)
+                        }
+                        .onTapGesture {
+                            HapticManager.light()
+                            appState.selectedDetail = .friend(friend)
+                        }
+                    }
+                }
+                .padding(.horizontal)
+            }
+        }
+    }
+
+    // MARK: Feed
+
+    private var feedSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("动态").font(.subheadline.bold())
+                Spacer()
+            }
+            .padding(.horizontal)
+
+            LazyVStack(spacing: 2) {
+                ForEach(appState.feedItems) { item in
+                    ActivityRow(item: item)
+                    if item.id != appState.feedItems.last?.id {
+                        Divider().padding(.leading, 60)
+                    }
+                }
+            }
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+            .padding(.horizontal)
+        }
+    }
+
+    // MARK: World Recommendations
+
+    private var worldRecommendations: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("推荐世界").font(.subheadline.bold())
+                Spacer()
+            }
+            .padding(.horizontal)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(appState.worlds.prefix(8)) { world in
+                        VStack(alignment: .leading, spacing: 6) {
+                            AsyncImage(url: world.thumbnailImageUrl.flatMap(URL.init)) { phase in
+                                switch phase {
+                                case .success(let image):
+                                    image.resizable().scaledToFill()
+                                default:
+                                    RoundedRectangle(cornerRadius: 10).fill(.quaternary)
+                                        .overlay(Image(systemName: "globe.americas").foregroundStyle(.tertiary))
+                                }
+                            }
+                            .frame(width: 140, height: 88)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+
+                            Text(world.name ?? "未知世界")
+                                .font(.caption).fontWeight(.medium).lineLimit(1)
+
+                            if let n = world.occupants {
+                                Label("\(n)", systemImage: "person.fill")
+                                    .font(.caption2).foregroundStyle(.secondary)
+                            }
+                        }
+                        .frame(width: 140)
+                        .onTapGesture {
+                            HapticManager.light()
+                            appState.selectedDetail = .world(world)
+                        }
+                    }
+                }
+                .padding(.horizontal)
+            }
+        }
+    }
+
+    private func refreshAll() async {
+        let api = VRChatAPIClient.shared
+        do { appState.friends = try await api.fetchFriends() }
+        catch { appState.errorMessage = error.localizedDescription }
+        do { appState.notifications = try await api.fetchNotifications() }
+        catch { /* non-critical: feed items will skip notification entries */ }
+        do { appState.worlds = try await api.fetchActiveWorlds() }
+        catch { /* non-critical: feed items will skip world entries */ }
+        appState.refreshFeed()
+    }
+}
+
+// MARK: - Quick Action Card
+
+struct QuickActionCard: View {
+    let icon: String
+    let label: String
+    let count: Int
+    let color: Color
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: icon)
+                        .font(.title3).foregroundStyle(color)
+                        .frame(height: 28)
+                    if count > 0 {
+                        Text("\(count)")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(3)
+                            .background(.red, in: Circle())
+                            .offset(x: 8, y: -4)
+                    }
+                }
+                Text(label).font(.caption2).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Activity Row
+
+struct ActivityRow: View {
+    let item: ActivityItem
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // Icon
+            Image(systemName: iconName)
+                .font(.title3).foregroundStyle(iconColor)
+                .frame(width: 30)
+
+            // Content
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.subheadline).fontWeight(.medium)
+                if let subtitle {
+                    Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer()
+
+            // Time marker
+            Image(systemName: "chevron.right")
+                .font(.caption2).foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            HapticManager.light()
+            switch item {
+            case .friendOnline(let f), .friendActive(let f), .friendInWorld(let f, _):
+                appState.selectedDetail = .friend(f)
+            case .friendRequest(let n), .invite(let n):
+                appState.selectedDetail = .notification(n)
+            case .worldPopular(let w):
+                appState.selectedDetail = .world(w)
+            }
+        }
+    }
+
+    private var iconName: String {
+        switch item {
+        case .friendOnline:          return "circle.fill"
+        case .friendActive:          return "sparkles"
+        case .friendInWorld:         return "globe.americas.fill"
+        case .friendRequest:         return "person.badge.plus"
+        case .invite:                return "envelope.fill"
+        case .worldPopular:          return "flame.fill"
+        }
+    }
+
+    private var iconColor: Color {
+        switch item {
+        case .friendOnline:          return .green
+        case .friendActive:          return .orange
+        case .friendInWorld:         return .blue
+        case .friendRequest:         return .orange
+        case .invite:                return .cyan
+        case .worldPopular:          return .red
+        }
+    }
+
+    private var title: String {
+        switch item {
+        case .friendOnline(let f):
+            return "\(f.displayName ?? f.username ?? "好友") 上线了"
+        case .friendActive(let f):
+            return "\(f.displayName ?? f.username ?? "好友") 正在活跃"
+        case .friendInWorld(let f, _):
+            return "\(f.displayName ?? f.username ?? "好友") 在探索世界"
+        case .friendRequest:
+            return "新的好友请求"
+        case .invite:
+            return "收到世界邀请"
+        case .worldPopular(let w):
+            return "热门世界: \(w.name ?? "未知")"
+        }
+    }
+
+    private var subtitle: String? {
+        switch item {
+        case .friendOnline(let f):
+            return f.statusDescription
+        case .friendActive(let f):
+            return f.statusDescription
+        case .friendInWorld(_, let loc):
+            return loc.hasPrefix("wrld_") ? "正在世界中" : loc
+        case .friendRequest(let n):
+            return "来自 \(n.senderUsername ?? "未知")"
+        case .invite(let n):
+            return "来自 \(n.senderUsername ?? "未知")"
+        case .worldPopular(let w):
+            return "\(w.occupants ?? 0) 人在线"
+        }
+    }
+}
+
+// MARK: - Memories View
+
+struct MemoriesView: View {
+    @Environment(AppState.self) private var appState
+    let isCompact: Bool
+    @State private var selectedTab = 0
+
+    var body: some View {
+        Group {
+            if !appState.isLoggedIn {
+                ContentUnavailableView(
+                    "需要登录", systemImage: "clock.arrow.2.circlepath",
+                    description: Text("登录后记录你的 VR 社交回忆")
+                )
+            } else {
+                ScrollView {
+                    VStack(spacing: 20) {
+                        // ── Summary Stats ──
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 2)) {
+                            MemoryStatCard(
+                                icon: "person.2.fill", label: "好友",
+                                value: "\(appState.friends.count)", color: .blue
+                            )
+                            MemoryStatCard(
+                                icon: "globe.americas.fill", label: "常去世界",
+                                value: "\(appState.worlds.count)+", color: .green
+                            )
+                            MemoryStatCard(
+                                icon: "bell.fill", label: "未读通知",
+                                value: "\(appState.unreadNotificationCount)", color: .orange
+                            )
+                            MemoryStatCard(
+                                icon: "star.fill", label: "收藏好友",
+                                value: "\(appState.favoriteFriends.count)", color: .yellow
+                            )
+                        }
+                        .padding(.horizontal)
+
+                        // ── Coming Soon Banner ──
+                        VStack(spacing: 12) {
+                            Image(systemName: "clock.badge.checkmark")
+                                .font(.system(size: 40)).foregroundStyle(.purple)
+                            Text("回忆时间线 即将推出")
+                                .font(.headline)
+                            Text("记录每次相遇、每个世界、每张照片\n生成你的 VR 社交年度报告")
+                                .font(.caption).foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                            HStack(spacing: 8) {
+                                ForEach(["时间线", "照片", "年度总结", "社交统计"], id: \.self) { feature in
+                                    Text(feature)
+                                        .font(.caption2)
+                                        .padding(.horizontal, 8).padding(.vertical, 4)
+                                        .background(.quaternary, in: Capsule())
+                                }
+                            }
+                        }
+                        .padding(24)
+                        .frame(maxWidth: .infinity)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                        .padding(.horizontal)
+
+                        // ── Recent Activity ──
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("近期动态").font(.subheadline.bold()).padding(.horizontal)
+                            ForEach(appState.feedItems.prefix(10)) { item in
+                                ActivityRow(item: item)
+                            }
+                        }
+                    }
+                    .padding(.vertical)
+                }
+            }
+        }
+        .refreshable {
+            do { appState.notifications = try await VRChatAPIClient.shared.fetchNotifications() }
+            catch { /* non-critical */ }
+            appState.refreshFeed()
+        }
+    }
+}
+
+// MARK: - Memory Stat Card
+
+struct MemoryStatCard: View {
+    let icon: String
+    let label: String
+    let value: String
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.title2).foregroundStyle(color)
+                .frame(width: 32)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(value).font(.title3.bold())
+                Text(label).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+// MARK: - Profile View
+
+struct ProfileView: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
         Form {
-            Section {
-                if appState.isLoggedIn {
-                    if let user = appState.currentUser {
-                        HStack {
-                            AvatarImage(url: user.userIcon, size: 44)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(user.displayName ?? user.username ?? "VRChat 用户")
-                                    .fontWeight(.medium)
-                                Text(user.id)
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
+            // ── User Info ──
+            if appState.isLoggedIn, let user = appState.currentUser {
+                Section {
+                    HStack(spacing: 14) {
+                        AvatarImage(url: user.userIcon, size: 56)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(user.displayName ?? user.username ?? "VRChat 用户")
+                                .font(.title3.bold())
+                            Text("@\(user.username ?? user.id)")
+                                .font(.caption).foregroundStyle(.secondary)
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(FriendStatusColor.color(state: user.state, status: user.status))
+                                    .frame(width: 7, height: 7)
+                                Text(FriendStatusColor.label(state: user.state, status: user.status))
+                                    .font(.caption2).foregroundStyle(.secondary)
                             }
                         }
                     }
+                }
+            } else {
+                Section {
+                    Button {
+                        HapticManager.light()
+                        appState.showLoginSheet = true
+                    } label: {
+                        Label("登录 VRChat", systemImage: "person.crop.circle.badge.plus")
+                    }
+                }
+            }
+
+            // ── My Stats ──
+            if appState.isLoggedIn {
+                Section("我的数据") {
+                    LabeledContent("好友数", value: "\(appState.friends.count)")
+                    LabeledContent("在线好友", value: "\(appState.onlineFriends.count)")
+                    LabeledContent("未读通知", value: "\(appState.unreadNotificationCount)")
+                    LabeledContent("收藏好友", value: "\(appState.favoriteFriends.count)")
+                }
+            }
+
+            // ── Favorites ──
+            if appState.isLoggedIn && !appState.favoriteFriends.isEmpty {
+                Section("收藏好友") {
+                    ForEach(appState.favoriteFriends.prefix(5)) { friend in
+                        HStack {
+                            AvatarImage(url: friend.userIcon, size: 30)
+                            Text(friend.displayName ?? friend.username ?? "?")
+                                .font(.subheadline)
+                        }
+                    }
+                    if appState.favoriteFriends.count > 5 {
+                        Text("...还有 \(appState.favoriteFriends.count - 5) 位")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            // ── Actions ──
+            if appState.isLoggedIn {
+                Section {
                     Button(role: .destructive) {
                         HapticManager.heavy()
                         Task { await appState.logout() }
                     } label: {
                         Label("退出登录", systemImage: "rectangle.portrait.and.arrow.right")
                     }
-                } else {
-                    Button {
-                        HapticManager.light()
-                        appState.showLoginSheet = true
-                    } label: {
-                        Label("登录 VRChat", systemImage: "person.crop.circle")
-                    }
                 }
-            } header: {
-                Text("账户")
             }
 
+            // ── About ──
             Section {
                 LabeledContent("版本", value: "1.0.0")
                 LabeledContent("项目", value: "VRCX-Lite")
@@ -1749,7 +2373,7 @@ struct SettingsView: View {
                 Text("关于")
             }
         }
-        .navigationTitle("设置")
+        .navigationTitle("我的")
     }
 }
 
