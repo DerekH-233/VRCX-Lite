@@ -90,6 +90,14 @@ struct MainContainerView: View {
     @State private var selectedSection: AppSection = .friends
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
+    /// Computed binding because @Environment Observable doesn't support $ prefix.
+    private var showLoginBinding: Binding<Bool> {
+        Binding(
+            get: { appState.showLoginSheet },
+            set: { appState.showLoginSheet = $0 }
+        )
+    }
+
     var body: some View {
         ZStack {
             Group {
@@ -124,14 +132,6 @@ struct MainContainerView: View {
         .sheet(isPresented: showLoginBinding) {
             LoginView()
         }
-
-    /// Computed binding because @Environment Observable doesn't support $ prefix.
-    private var showLoginBinding: Binding<Bool> {
-        Binding(
-            get: { appState.showLoginSheet },
-            set: { appState.showLoginSheet = $0 }
-        )
-    }
     }
 
     // MARK: - Three-Column (iPad)
@@ -579,7 +579,7 @@ struct LoginView: View {
         if pending2FAMethods.isEmpty {
             // Step 1: Login
             do {
-                let user = try await appState.login(username: username, password: password)
+                _ = try await appState.login(username: username, password: password)
                 dismiss()
             } catch VRChatAPIError.requiresTwoFactorAuth(let methods) {
                 HapticManager.warning()
