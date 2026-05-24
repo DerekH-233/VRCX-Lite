@@ -182,6 +182,7 @@ struct MainContainerView: View {
                 .tabItem {
                     Label(section.label, systemImage: section.systemImage)
                 }
+                .badge(section == .notifications ? appState.unreadNotificationCount : 0)
                 .tag(section)
             }
         }
@@ -245,10 +246,18 @@ struct MainContainerView: View {
                             Label(section.label, systemImage: section.systemImage)
                                 .foregroundStyle(selectedSection == section ? .primary : .secondary)
                             Spacer()
-                            if selectedSection == section {
+                            if section == .notifications, appState.unreadNotificationCount > 0 {
+                                Text("\(appState.unreadNotificationCount)")
+                                    .font(.caption2).fontWeight(.bold)
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 6).padding(.vertical, 2)
+                                    .background(.red, in: Capsule())
+                            } else if section == .friends, appState.isLoggedIn {
+                                Text("\(appState.friends.count)")
+                                    .font(.caption2).foregroundStyle(.secondary)
+                            } else if selectedSection == section {
                                 Image(systemName: "chevron.right")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .font(.caption).foregroundStyle(.secondary)
                             }
                         }
                     }
@@ -352,6 +361,35 @@ final class AppState {
 
     private let api = VRChatAPIClient.shared
 
+    // MARK: Computed Properties
+
+    var unreadNotificationCount: Int {
+        notifications.filter { $0.seen == false }.count
+    }
+
+    var onlineFriends: [Friend] {
+        friends.filter { ($0.state ?? "offline") != "offline" }
+    }
+
+    var offlineFriends: [Friend] {
+        friends.filter { ($0.state ?? "offline") == "offline" }
+    }
+
+    var activeFriends: [Friend] {
+        friends.filter {
+            let s = ($0.status ?? $0.state ?? "").lowercased()
+            return s == "active" || s == "join me"
+        }
+    }
+
+    var friendRequests: [VRCNotification] {
+        notifications.filter { $0.type == "friendRequest" }
+    }
+
+    var invites: [VRCNotification] {
+        notifications.filter { $0.type == "invite" || $0.type == "requestInvite" }
+    }
+
     // MARK: Session Restoration
 
     func restoreSessionIfPossible() async {
@@ -407,6 +445,25 @@ final class AppState {
         worlds = []
         selectedDetail = nil
         errorMessage = nil
+    }
+
+    func markAllNotificationsRead() async {
+        let unreadIDs = notifications.filter { $0.seen == false }.map(\.id)
+        guard !unreadIDs.isEmpty else { return }
+
+        for id in unreadIDs {
+            do {
+                try await api.markNotificationSeen(notificationID: id)
+            } catch {
+                // Individual mark may fail; continue with remaining
+            }
+        }
+        // Re-fetch to sync state
+        do {
+            notifications = try await api.fetchNotifications()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 }
 
@@ -669,28 +726,89 @@ private struct SelectableRow<Content: View>: View {
 
 // MARK: - Friends List
 
+enum FriendFilter: String, CaseIterable {
+    case all
+    case online
+    case active
+    case offline
+
+    var label: String {
+        switch self {
+        case .all:     return "全部"
+        case .online:  return "在线"
+        case .active:  return "活跃"
+        case .offline: return "离线"
+        }
+    }
+}
+
 struct FriendsListView: View {
     @Environment(AppState.self) private var appState
     let isCompact: Bool
+    @State private var filter: FriendFilter = .all
+
+    private var filteredFriends: [Friend] {
+        switch filter {
+        case .all:     return appState.friends
+        case .online:  return appState.onlineFriends
+        case .active:  return appState.activeFriends
+        case .offline: return appState.offlineFriends
+        }
+    }
 
     var body: some View {
         Group {
             if appState.isRestoringSession {
                 ProgressView("恢复登录…")
-            } else if appState.isLoadingFriends && appState.friends.isEmpty {
-                ProgressView("加载好友列表…")
             } else if !appState.isLoggedIn {
                 ContentUnavailableView(
-                    "未登录",
-                    systemImage: "person.2.slash",
+                    "未登录", systemImage: "person.2.slash",
                     description: Text("请先登录 VRChat 账户以查看好友列表")
                 )
-            } else if appState.friends.isEmpty {
-                ContentUnavailableView("暂无好友", systemImage: "person.2.slash")
             } else {
-                List(appState.friends) { friend in
-                    SelectableRow(detail: .friend(friend), isCompact: isCompact) {
-                        FriendRow(friend: friend)
+                VStack(spacing: 0) {
+                    // ── Filter + Count ──
+                    HStack {
+                        Picker("筛选", selection: $filter) {
+                            ForEach(FriendFilter.allCases, id: \.self) { f in
+                                Text(f.label).tag(f)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
+
+                        Text("共 \(filteredFriends.count) 人")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.trailing)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                    }
+                    .background(.ultraThinMaterial)
+
+                    if appState.isLoadingFriends && appState.friends.isEmpty {
+                        List(0..<8) { _ in
+                            HStack(spacing: 12) {
+                                Circle().fill(.quaternary).frame(width: 40, height: 40)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    RoundedRectangle(cornerRadius: 4).fill(.quaternary).frame(width: 120, height: 14)
+                                    RoundedRectangle(cornerRadius: 4).fill(.quaternary).frame(width: 60, height: 10)
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        .redacted(reason: .placeholder)
+                    } else if filteredFriends.isEmpty {
+                        ContentUnavailableView(
+                            filter == .all ? "暂无好友" : "无匹配好友",
+                            systemImage: "person.2.slash"
+                        )
+                    } else {
+                        List(filteredFriends) { friend in
+                            SelectableRow(detail: .friend(friend), isCompact: isCompact) {
+                                FriendRow(friend: friend)
+                            }
+                        }
                     }
                 }
                 .refreshable { await refreshFriends() }
@@ -733,30 +851,53 @@ struct FriendRow: View {
         FriendStatusColor.label(state: friend.state, status: friend.status)
     }
 
+    private var locationHint: String? {
+        guard let loc = friend.location, !loc.isEmpty, loc != "offline", loc != "private" else {
+            return nil
+        }
+        if loc.hasPrefix("wrld_") { return "世界中" }
+        if loc.contains(":") { return "实例中" }
+        return loc
+    }
+
     var body: some View {
         HStack(spacing: 12) {
-            // Avatar with 1pt semi-transparent white border
             AvatarImage(url: friend.userIcon, size: 40)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(friend.displayName ?? friend.username ?? "未知用户")
-                    .fontWeight(.medium)
-                    .lineLimit(1)
-                Text(statusText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    Text(friend.displayName ?? friend.username ?? "未知用户")
+                        .fontWeight(.medium)
+                        .lineLimit(1)
+                    if friend.isFavorite == true {
+                        Image(systemName: "star.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.yellow)
+                    }
+                }
+                HStack(spacing: 4) {
+                    // Online indicator dot
+                    Circle()
+                        .fill(statusColor)
+                        .frame(width: 6, height: 6)
+                    Text(statusText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    if let hint = locationHint {
+                        Text("· \(hint)")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+                }
             }
 
             Spacer()
 
-            // Status indicator dot
-            Circle()
-                .fill(statusColor)
-                .frame(width: 10, height: 10)
-                .overlay(
-                    Circle()
-                        .stroke(.white.opacity(0.2), lineWidth: 0.5)
-                )
+            Image(systemName: "chevron.right")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
         }
         .padding(.vertical, 4)
     }
@@ -764,31 +905,91 @@ struct FriendRow: View {
 
 // MARK: - Notifications List
 
+enum NotificationFilter: String, CaseIterable {
+    case all
+    case friendRequests
+    case invites
+
+    var label: String {
+        switch self {
+        case .all:            return "全部"
+        case .friendRequests: return "好友请求"
+        case .invites:        return "邀请"
+        }
+    }
+}
+
 struct NotificationsView: View {
     @Environment(AppState.self) private var appState
     let isCompact: Bool
+    @State private var filter: NotificationFilter = .all
+
+    private var filteredNotifications: [VRCNotification] {
+        switch filter {
+        case .all:            return appState.notifications
+        case .friendRequests: return appState.friendRequests
+        case .invites:        return appState.invites
+        }
+    }
 
     var body: some View {
         Group {
             if appState.isRestoringSession {
                 ProgressView("恢复登录…")
-            } else if appState.isLoadingNotifications && appState.notifications.isEmpty {
-                ProgressView("加载通知…")
             } else if !appState.isLoggedIn {
                 ContentUnavailableView(
-                    "未登录",
-                    systemImage: "bell.slash",
+                    "未登录", systemImage: "bell.slash",
                     description: Text("请先登录以查看通知")
                 )
-            } else if appState.notifications.isEmpty {
-                ContentUnavailableView("暂无通知", systemImage: "bell.slash")
             } else {
-                List(appState.notifications) { notif in
-                    SelectableRow(detail: .notification(notif), isCompact: isCompact) {
-                        NotificationRow(notification: notif)
+                VStack(spacing: 0) {
+                    Picker("筛选", selection: $filter) {
+                        ForEach(NotificationFilter.allCases, id: \.self) { f in
+                            Text(f.label).tag(f)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+
+                    if appState.isLoadingNotifications && appState.notifications.isEmpty {
+                        List(0..<6) { _ in
+                            HStack(spacing: 12) {
+                                RoundedRectangle(cornerRadius: 8).fill(.quaternary).frame(width: 36, height: 36)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    RoundedRectangle(cornerRadius: 4).fill(.quaternary).frame(width: 100, height: 14)
+                                    RoundedRectangle(cornerRadius: 4).fill(.quaternary).frame(width: 60, height: 10)
+                                }
+                            }
+                        }
+                        .redacted(reason: .placeholder)
+                    } else if filteredNotifications.isEmpty {
+                        ContentUnavailableView(
+                            filter == .all ? "暂无通知" : "无匹配通知",
+                            systemImage: filter == .all ? "bell.slash" : "bell"
+                        )
+                    } else {
+                        List(filteredNotifications) { notif in
+                            SelectableRow(detail: .notification(notif), isCompact: isCompact) {
+                                NotificationRow(notification: notif)
+                            }
+                        }
                     }
                 }
                 .refreshable { await refreshNotifications() }
+                .toolbar {
+                    if appState.unreadNotificationCount > 0 {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button {
+                                HapticManager.light()
+                                Task { await appState.markAllNotificationsRead() }
+                            } label: {
+                                Text("全部已读")
+                                    .font(.caption)
+                            }
+                        }
+                    }
+                }
             }
         }
         .if(isCompact) { view in
@@ -867,30 +1068,126 @@ struct NotificationRow: View {
 
 // MARK: - Worlds List
 
+enum WorldCategory: String, CaseIterable {
+    case trending
+    case popular
+    case recent
+    case search
+
+    var label: String {
+        switch self {
+        case .trending: return "热门"
+        case .popular:  return "最多人"
+        case .recent:   return "最新"
+        case .search:   return "搜索"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .trending: return "flame"
+        case .popular:  return "person.3"
+        case .recent:   return "clock"
+        case .search:   return "magnifyingglass"
+        }
+    }
+}
+
 struct WorldsView: View {
     @Environment(AppState.self) private var appState
     let isCompact: Bool
+    @State private var selectedCategory: WorldCategory = .trending
     @State private var searchText = ""
 
     var body: some View {
         Group {
             if appState.isRestoringSession {
                 ProgressView("恢复登录…")
-            } else if appState.isLoadingWorlds && appState.worlds.isEmpty {
-                ProgressView("加载世界列表…")
             } else if !appState.isLoggedIn {
                 ContentUnavailableView(
-                    "未登录",
-                    systemImage: "globe.americas",
+                    "未登录", systemImage: "globe.americas",
                     description: Text("请先登录以浏览世界")
                 )
             } else {
-                List(appState.worlds) { world in
-                    SelectableRow(detail: .world(world), isCompact: isCompact) {
-                        WorldRow(world: world)
+                VStack(spacing: 0) {
+                    // ── Category Picker ──
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(WorldCategory.allCases, id: \.self) { cat in
+                                Button {
+                                    HapticManager.selection()
+                                    selectedCategory = cat
+                                    if cat == .search { return }
+                                    Task { await refreshWorlds() }
+                                } label: {
+                                    Label(cat.label, systemImage: cat.icon)
+                                        .font(.caption).fontWeight(.medium)
+                                        .padding(.horizontal, 12).padding(.vertical, 6)
+                                        .background(
+                                            selectedCategory == cat
+                                            ? .tint
+                                            : .quaternary,
+                                            in: Capsule()
+                                        )
+                                        .foregroundStyle(
+                                            selectedCategory == cat
+                                            ? .white
+                                            : .secondary
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
+                    }
+                    .background(.ultraThinMaterial)
+
+                    // ── Search Bar (when search category) ──
+                    if selectedCategory == .search {
+                        HStack(spacing: 8) {
+                            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                            TextField("搜索世界…", text: $searchText)
+                                .textFieldStyle(.plain)
+                                .onSubmit { Task { await refreshWorlds() } }
+                            if !searchText.isEmpty {
+                                Button {
+                                    searchText = ""
+                                    Task { await refreshWorlds() }
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .padding(10)
+                        .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+                        .padding(.horizontal)
+                        .padding(.vertical, 6)
+                    }
+
+                    // ── World List ──
+                    if appState.isLoadingWorlds && appState.worlds.isEmpty {
+                        List(0..<6) { _ in
+                            HStack(spacing: 12) {
+                                RoundedRectangle(cornerRadius: 8).fill(.quaternary).frame(width: 48, height: 48)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    RoundedRectangle(cornerRadius: 4).fill(.quaternary).frame(width: 140, height: 14)
+                                    RoundedRectangle(cornerRadius: 4).fill(.quaternary).frame(width: 80, height: 10)
+                                }
+                            }
+                        }
+                        .redacted(reason: .placeholder)
+                    } else if appState.worlds.isEmpty {
+                        ContentUnavailableView("未找到世界", systemImage: "globe.americas")
+                    } else {
+                        List(appState.worlds) { world in
+                            SelectableRow(detail: .world(world), isCompact: isCompact) {
+                                WorldRow(world: world)
+                            }
+                        }
                     }
                 }
-                .searchable(text: $searchText, prompt: "搜索世界…")
                 .refreshable { await refreshWorlds() }
             }
         }
@@ -904,18 +1201,28 @@ struct WorldsView: View {
                 await refreshWorlds()
             }
         }
-        .onChange(of: searchText) { _, newValue in
-            Task { await refreshWorlds(search: newValue) }
-        }
     }
 
-    private func refreshWorlds(search: String? = nil) async {
+    private func refreshWorlds() async {
         appState.isLoadingWorlds = true
         defer { appState.isLoadingWorlds = false }
 
+        var search: String? = nil
+        switch selectedCategory {
+        case .search: search = searchText.isEmpty ? nil : searchText
+        case .trending, .popular, .recent: search = nil
+        }
+
         do {
-            let q = (search?.isEmpty ?? true) ? nil : search
-            appState.worlds = try await VRChatAPIClient.shared.fetchActiveWorlds(search: q)
+            appState.worlds = try await VRChatAPIClient.shared.fetchActiveWorlds(search: search)
+            // Client-side sorting for categories
+            switch selectedCategory {
+            case .popular:
+                appState.worlds.sort { ($0.occupants ?? 0) > ($1.occupants ?? 0) }
+            case .recent:
+                appState.worlds.sort { ($0.updatedAt ?? "") > ($1.updatedAt ?? "") }
+            default: break
+            }
         } catch {
             appState.errorMessage = error.localizedDescription
         }
@@ -1207,6 +1514,7 @@ struct NotificationDetailView: View {
 
 struct WorldDetailView: View {
     let world: World
+    @Environment(AppState.self) private var appState
     @Environment(\.openURL) private var openURL
 
     var body: some View {
@@ -1217,7 +1525,7 @@ struct WorldDetailView: View {
                     switch phase {
                     case .success(let image):
                         image.resizable().scaledToFill()
-                    case .failure:
+                    default:
                         RoundedRectangle(cornerRadius: 16)
                             .fill(.quaternary)
                             .frame(height: 200)
@@ -1226,15 +1534,6 @@ struct WorldDetailView: View {
                                     .font(.largeTitle)
                                     .foregroundStyle(.tertiary)
                             )
-                    case .empty:
-                        RoundedRectangle(cornerRadius: 16)
-                            .fill(.quaternary)
-                            .frame(height: 200)
-                            .overlay(ProgressView())
-                    @unknown default:
-                        RoundedRectangle(cornerRadius: 16)
-                            .fill(.quaternary)
-                            .frame(height: 200)
                     }
                 }
                 .frame(height: 200)
@@ -1245,14 +1544,14 @@ struct WorldDetailView: View {
                     Text(world.name ?? "未知世界")
                         .font(.title2.bold())
                     if let author = world.authorName {
-                        Text(author)
+                        Label(author, systemImage: "person.fill")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
                 }
 
-                // Stats
-                HStack(spacing: 24) {
+                // Stats grid
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4)) {
                     if let occupants = world.occupants {
                         statView(icon: "person.2.fill", label: "在线", value: "\(occupants)")
                     }
@@ -1267,6 +1566,25 @@ struct WorldDetailView: View {
                     }
                 }
 
+                // Tags
+                if let tags = world.tags, !tags.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(tags, id: \.self) { tag in
+                                let label = tag
+                                    .replacingOccurrences(of: "content_", with: "")
+                                    .replacingOccurrences(of: "language_", with: "")
+                                    .replacingOccurrences(of: "_", with: " ")
+                                Text("#\(label)")
+                                    .font(.caption2)
+                                    .padding(.horizontal, 8).padding(.vertical, 3)
+                                    .background(.quaternary, in: Capsule())
+                            }
+                        }
+                        .padding(.horizontal)
+                    }
+                }
+
                 // Description
                 if let desc = world.description, !desc.isEmpty {
                     Divider()
@@ -1277,22 +1595,50 @@ struct WorldDetailView: View {
                             .foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
                 }
 
-                // Launch in VRChat
-                if let url = URL(string: "https://vrchat.com/home/world/\(world.id)") {
-                    Button {
-                        HapticManager.medium()
-                        openURL(url)
-                    } label: {
-                        Label("在 VRChat 中查看", systemImage: "arrow.up.forward.app")
-                            .frame(maxWidth: .infinity)
+                // Instances
+                if let instances = world.instances, !instances.isEmpty {
+                    Divider()
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("活跃实例 (\(instances.count))").font(.headline).padding(.horizontal)
+                        ForEach(instances.prefix(5), id: \.self) { dict in
+                            let name = dict["name"] ?? dict["id"] ?? "Unknown"
+                            let count = dict["n_users"] ?? dict["count"] ?? "?"
+                            HStack {
+                                Label(name, systemImage: "circle.grid.3x3")
+                                    .font(.subheadline)
+                                Spacer()
+                                Text("\(count) 人")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.horizontal)
+                            .padding(.vertical, 4)
+                            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+                            .padding(.horizontal)
+                        }
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.regular)
                 }
+
+                // Launch
+                Button {
+                    HapticManager.medium()
+                    if let url = VRChatAPIClient.shared.buildWorldLaunchURL(
+                        worldID: world.id, instanceID: nil
+                    ) {
+                        openURL(url)
+                    }
+                } label: {
+                    Label("在 VRChat 中查看", systemImage: "arrow.up.forward.app")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                .padding(.horizontal)
             }
-            .padding()
+            .padding(.vertical)
             .frame(maxWidth: .infinity)
         }
         .navigationTitle(world.name ?? "世界详情")
