@@ -1,0 +1,27 @@
+# ── 证书 (绝不提交) ──
+ios-certs/
+
+# ── Xcode ──
+*.xcworkspace
+xcuserdata/
+DerivedData/
+*.xcuserstate
+*.xcbkptlist
+
+# ── 构建产物 ──
+build/
+*.ipa
+*.xcarchive
+*.app
+
+# ── XcodeGen 生成 (CI 会重新生成) ──
+*.xcodeproj/
+!*.xcodeproj/project.pbxproj
+
+# ── 系统文件 ──
+.DS_Store
+Thumbs.db
+
+# ── IDE ──
+.vscode/
+.idea/

@@ -1,0 +1,111 @@
+name: Build Unsigned IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SCHEME: VRCX-Lite
+  PROJECT: VRCX-Lite.xcodeproj
+
+jobs:
+  build:
+    name: Build Unsigned IPA
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.app
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode Project
+        run: xcodegen generate
+
+      # ── 编译 (无签名) ──
+      - name: Build (Unsigned)
+        run: |
+          xcodebuild build \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            ONLY_ACTIVE_ARCH=NO \
+            | tee xcodebuild.log
+
+      # ── 定位 .app ──
+      - name: Locate .app
+        id: locate
+        run: |
+          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData \
+            -name "${SCHEME}.app" \
+            -path "*/Release-iphoneos/*" \
+            -not -path "*/Index.*" \
+            | head -1)
+
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::Could not find ${SCHEME}.app"
+            find ~/Library/Developer/Xcode/DerivedData -name "${SCHEME}.app" 2>/dev/null || true
+            exit 1
+          fi
+
+          echo "app_path=$APP_PATH" >> "$GITHUB_OUTPUT"
+          echo ".app found: $APP_PATH"
+
+      # ── 打包 unsigned IPA ──
+      - name: Package IPA
+        id: ipa
+        run: |
+          APP_PATH="${{ steps.locate.outputs.app_path }}"
+          IPA_DIR="./build/ipa"
+          mkdir -p "$IPA_DIR/Payload"
+          cp -R "$APP_PATH" "$IPA_DIR/Payload/"
+
+          IPA_FILE="./build/${SCHEME}.ipa"
+          (cd "$IPA_DIR" && zip -qr "../${SCHEME}.ipa" Payload)
+
+          echo "ipa_path=$IPA_FILE" >> "$GITHUB_OUTPUT"
+          ls -la "$IPA_FILE"
+
+      # ── 上传 ──
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: VRCX-Lite-unsigned.ipa
+          path: ${{ steps.ipa.outputs.ipa_path }}
+          retention-days: 90
+
+      - name: Upload Logs (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: xcodebuild.log
+          retention-days: 7
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          if [ -f "${{ steps.ipa.outputs.ipa_path }}" ]; then
+            echo "✅ Unsigned IPA ready"
+            echo "   📦 Bundle ID: com.vrcx-lite"
+            echo "   🔓 No signing — ready for self-sign"
+            echo "   📥 Download: Actions → Artifacts"
+          else
+            echo "⚠️  Build failed — check log above"
+          fi
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

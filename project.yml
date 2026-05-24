@@ -1,0 +1,33 @@
+name: VRCX-Lite
+options:
+  bundleIdPrefix: com.vrcx-lite
+  deploymentTarget:
+    iOS: "17.0"
+  xcodeVersion: "16.0"
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+
+targets:
+  VRCX-Lite:
+    type: application
+    platform: iOS
+    sources:
+      - path: VRCX-Lite
+        type: group
+    info:
+      path: VRCX-Lite/Info.plist
+    entitlements:
+      path: VRCX-Lite/VRCX-Lite.entitlements
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vrcx-lite
+        INFOPLIST_FILE: VRCX-Lite/Info.plist
+        CODE_SIGN_ENTITLEMENTS: VRCX-Lite/VRCX-Lite.entitlements
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGNING_ALLOWED: NO
+        TARGETED_DEVICE_FAMILY: "1,2"
