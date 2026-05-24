@@ -25,17 +25,10 @@
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>
-		<string></string>
-		<key>UIImageName</key>
-		<string></string>
-		<key>UIImageRespectsSafeAreaInsets</key>
-		<false/>
+		<string>LaunchBackground</string>
 	</dict>
 	<key>UIApplicationSceneManifest</key>
-	<dict>
-		<key>UIApplicationSupportsMultipleScenes</key>
-		<false/>
-	</dict>
+	<dict/>
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
 		<string>arm64</string>

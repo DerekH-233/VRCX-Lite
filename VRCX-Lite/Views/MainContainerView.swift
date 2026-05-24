@@ -137,22 +137,21 @@ struct MainContainerView: View {
             if let error = appState.errorMessage {
                 VStack {
                     ErrorBanner(message: error) {
-                        appState.errorMessage = nil
+                        withAnimation(.spring(response: 0.4)) {
+                            appState.errorMessage = nil
+                        }
                     }
-                    .transition(.move(edge: .top).combined(with: .opacity))
                     Spacer()
                 }
-                .animation(.spring(response: 0.4), value: appState.errorMessage != nil)
-                .padding(.top, 8)
-                .padding(.horizontal)
+                .transition(.move(edge: .top).combined(with: .opacity))
                 .zIndex(100)
             }
         }
-        // ── Auto-restore session on launch ──
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .ignoresSafeArea(.container, edges: .bottom)
         .task {
             await appState.restoreSessionIfPossible()
         }
-        // ── Login sheet ──
         .sheet(isPresented: showLoginBinding) {
             LoginView()
         }
@@ -170,12 +169,14 @@ struct MainContainerView: View {
             content: {
                 contentColumn
                     .navigationSplitViewColumnWidth(min: 320, ideal: 380, max: .infinity)
+                    .background(.ultraThinMaterial)
             },
             detail: {
                 detailColumn
+                    .background(.ultraThinMaterial)
             }
         )
-        .navigationSplitViewStyle(.balanced)
+        .navigationSplitViewStyle(.prominentDetail)
         .onChange(of: selectedSection) { _, _ in
             HapticManager.selection()
         }
@@ -219,35 +220,27 @@ struct MainContainerView: View {
 
     private var sidebarContent: some View {
         List {
-            // ── User Header ──
             Section {
                 if let user = appState.currentUser {
-                    VStack(alignment: .leading, spacing: 8) {
-                        AvatarImage(url: user.userIcon, size: 44)
+                    VStack(alignment: .leading, spacing: 10) {
+                        AvatarImage(url: user.userIcon, size: 48)
                         Text(user.displayName ?? user.username ?? "VRChat 用户")
-                            .font(.headline)
+                            .font(.title3.bold())
                         if let statusDesc = user.statusDescription {
                             Text(statusDesc)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(FriendStatusColor.color(state: user.state, status: user.status).gradient)
+                                .frame(width: 9, height: 9)
+                            Text(FriendStatusColor.label(state: user.state, status: user.status))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
-                        // Mini status indicator
-                        HStack(spacing: 4) {
-                            Circle()
-                                .fill(FriendStatusColor.color(
-                                    state: user.state,
-                                    status: user.status
-                                ))
-                                .frame(width: 8, height: 8)
-                            Text(FriendStatusColor.label(
-                                state: user.state,
-                                status: user.status
-                            ))
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                        }
                     }
-                    .padding(.vertical, 4)
+                    .padding(.vertical, 8)
                 } else {
                     Button {
                         HapticManager.light()
@@ -259,8 +252,7 @@ struct MainContainerView: View {
                 }
             }
 
-            // ── Navigation Items ──
-            Section("导航") {
+            Section {
                 ForEach(AppSection.allCases) { section in
                     Button {
                         HapticManager.selection()
@@ -268,19 +260,16 @@ struct MainContainerView: View {
                     } label: {
                         HStack {
                             Label(section.label, systemImage: section.systemImage)
-                                .foregroundStyle(selectedSection == section ? .primary : .secondary)
+                                .font(selectedSection == section ? .body.bold() : .body)
                             Spacer()
                             if section == .home, appState.unreadNotificationCount > 0 {
                                 Text("\(appState.unreadNotificationCount)")
-                                    .font(.caption2).fontWeight(.bold)
+                                    .font(.caption).fontWeight(.bold)
                                     .foregroundStyle(.white)
-                                    .padding(.horizontal, 6).padding(.vertical, 2)
-                                    .background(.red, in: Capsule())
+                                    .padding(.horizontal, 7).padding(.vertical, 3)
+                                    .background(.red.gradient, in: Capsule())
                             } else if section == .friends, appState.isLoggedIn {
                                 Text("\(appState.friends.count)")
-                                    .font(.caption2).foregroundStyle(.secondary)
-                            } else if selectedSection == section {
-                                Image(systemName: "chevron.right")
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                         }
@@ -290,21 +279,9 @@ struct MainContainerView: View {
             }
         }
         .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+        .background(.ultraThinMaterial)
         .navigationTitle("VRCX-Lite")
-        .toolbar {
-            ToolbarItem(placement: .bottomBar) {
-                if appState.isLoggedIn {
-                    Button(role: .destructive) {
-                        HapticManager.heavy()
-                        Task { await appState.logout() }
-                    } label: {
-                        Label("退出登录", systemImage: "rectangle.portrait.and.arrow.right")
-                    }
-                    .buttonStyle(.plain)
-                    .font(.caption)
-                }
-            }
-        }
     }
 
     // MARK: - Content Column (iPad)
@@ -552,24 +529,26 @@ struct ErrorBanner: View {
     let onDismiss: () -> Void
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 14) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.red)
+                .foregroundStyle(.orange.gradient)
+                .font(.title3)
             Text(message)
-                .font(.caption)
+                .font(.subheadline)
                 .fontWeight(.medium)
             Spacer()
             Button(action: onDismiss) {
                 Image(systemName: "xmark.circle.fill")
+                    .font(.title3)
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(.red.opacity(0.3), lineWidth: 0.5)
-        )
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
+        .shadow(color: .black.opacity(0.12), radius: 10, y: 4)
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
     }
 }
 
@@ -584,24 +563,15 @@ struct AvatarImage: View {
             switch phase {
             case .success(let image):
                 image.resizable().scaledToFill()
-            case .failure:
+            default:
                 Image(systemName: "person.crop.circle.fill")
                     .resizable()
-                    .foregroundStyle(.tertiary)
-            case .empty:
-                ProgressView().scaleEffect(0.6)
-            @unknown default:
-                Image(systemName: "person.crop.circle")
-                    .resizable()
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
             }
         }
         .frame(width: size, height: size)
         .clipShape(Circle())
-        .overlay(
-            Circle()
-                .stroke(.white.opacity(0.15), lineWidth: 1)
-        )
+        .shadow(color: .black.opacity(0.15), radius: 4, y: 2)
     }
 }
 
@@ -939,45 +909,37 @@ struct FriendRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 12) {
-            AvatarImage(url: friend.userIcon, size: 40)
+        HStack(spacing: 14) {
+            AvatarImage(url: friend.userIcon, size: 42)
 
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
                     Text(friend.displayName ?? friend.username ?? "未知用户")
-                        .fontWeight(.medium)
+                        .fontWeight(.semibold)
                         .lineLimit(1)
                     if friend.isFavorite == true {
                         Image(systemName: "star.fill")
                             .font(.caption2)
-                            .foregroundStyle(.yellow)
+                            .foregroundStyle(.orange.gradient)
                     }
                 }
-                HStack(spacing: 4) {
-                    // Online indicator dot
+                HStack(spacing: 6) {
                     Circle()
-                        .fill(statusColor)
-                        .frame(width: 6, height: 6)
+                        .fill(statusColor.gradient)
+                        .frame(width: 7, height: 7)
                     Text(statusText)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
                     if let hint = locationHint {
-                        Text("· \(hint)")
-                            .font(.caption)
+                        Text(hint)
+                            .font(.caption2)
                             .foregroundStyle(.tertiary)
-                            .lineLimit(1)
                     }
                 }
             }
-
-            Spacer()
-
-            Image(systemName: "chevron.right")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 10)
+        .padding(.horizontal, 4)
     }
 }
 
