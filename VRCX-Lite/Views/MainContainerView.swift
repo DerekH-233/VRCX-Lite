@@ -1125,8 +1125,8 @@ struct WorldsView: View {
                                         .padding(.horizontal, 12).padding(.vertical, 6)
                                         .background(
                                             selectedCategory == cat
-                                            ? .tint
-                                            : .quaternary,
+                                            ? AnyShapeStyle(.tint)
+                                            : AnyShapeStyle(.quaternary),
                                             in: Capsule()
                                         )
                                         .foregroundStyle(
