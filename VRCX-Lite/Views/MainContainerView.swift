@@ -121,9 +121,17 @@ struct MainContainerView: View {
             await appState.restoreSessionIfPossible()
         }
         // ── Login sheet ──
-        .sheet(isPresented: $appState.showLoginSheet) {
+        .sheet(isPresented: showLoginBinding) {
             LoginView()
         }
+
+    /// Computed binding because @Environment Observable doesn't support $ prefix.
+    private var showLoginBinding: Binding<Bool> {
+        Binding(
+            get: { appState.showLoginSheet },
+            set: { appState.showLoginSheet = $0 }
+        )
+    }
     }
 
     // MARK: - Three-Column (iPad)
@@ -185,7 +193,7 @@ struct MainContainerView: View {
     // MARK: - Sidebar
 
     private var sidebarContent: some View {
-        List(selection: $selectedSection) {
+        List {
             // ── User Header ──
             Section {
                 if let user = appState.currentUser {
@@ -229,8 +237,22 @@ struct MainContainerView: View {
             // ── Navigation Items ──
             Section("导航") {
                 ForEach(AppSection.allCases) { section in
-                    Label(section.label, systemImage: section.systemImage)
-                        .tag(section)
+                    Button {
+                        HapticManager.selection()
+                        selectedSection = section
+                    } label: {
+                        HStack {
+                            Label(section.label, systemImage: section.systemImage)
+                                .foregroundStyle(selectedSection == section ? .primary : .secondary)
+                            Spacer()
+                            if selectedSection == section {
+                                Image(systemName: "chevron.right")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }
