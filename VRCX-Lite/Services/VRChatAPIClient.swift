@@ -476,6 +476,56 @@ actor VRChatAPIClient {
         _ = try await performRequest(request)
     }
 
+    // MARK: User Notes
+
+    /// Fetch the note for a specific user.
+    func fetchUserNote(userID: String) async throws -> UserNote {
+        try await authenticatedGET(path: "/user/\(userID)/note")
+    }
+
+    /// Update the note for a specific user.
+    func updateUserNote(userID: String, note: String) async throws {
+        let url = try buildURL(path: "/user/\(userID)/note")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try encoder.encode(["note": note])
+        _ = try await performRequest(request)
+    }
+
+    // MARK: Favorites
+
+    /// Fetch all favorites (friends, worlds, avatars).
+    func fetchFavorites() async throws -> [Favorite] {
+        try await authenticatedGET(path: "/favorites")
+    }
+
+    /// Fetch favorite friends only.
+    func fetchFavoriteFriends() async throws -> [FavoriteFriend] {
+        try await authenticatedGET(path: "/favorites/friends")
+    }
+
+    /// Fetch favorite worlds only.
+    func fetchFavoriteWorlds() async throws -> [FavoriteWorld] {
+        try await authenticatedGET(path: "/favorites/worlds")
+    }
+
+    /// Add a friend to favorites.
+    func addFavoriteFriend(userID: String) async throws {
+        let url = try buildURL(path: "/favorites/friend/\(userID)")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        _ = try await performRequest(request)
+    }
+
+    /// Remove a friend from favorites.
+    func removeFavoriteFriend(userID: String) async throws {
+        let url = try buildURL(path: "/favorites/friend/\(userID)")
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        _ = try await performRequest(request)
+    }
+
     // MARK: - Private Helpers
 
     /// Perform a GET request requiring authentication.
@@ -751,10 +801,12 @@ struct User: Codable, Identifiable, Hashable, Sendable {
     let displayName: String?
     let userIcon: String?
     let bio: String?
+    let bioLinks: [String]?
     let status: String?
     let statusDescription: String?
     let state: String?
     let lastLogin: String?
+    let lastActivity: String?
     let dateJoined: String?
     let tags: [String]?
     let developerType: String?
@@ -763,4 +815,31 @@ struct User: Codable, Identifiable, Hashable, Sendable {
     let location: String?
     let friendKey: String?
     let isFriend: Bool?
+    let lastPlatform: String?
+}
+
+struct UserNote: Codable, Hashable, Sendable {
+    let note: String?
+    let userId: String?
+}
+
+struct Favorite: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    let type: String?
+    let favoriteId: String?
+    let tags: [String]?
+}
+
+struct FavoriteFriend: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    let userId: String?
+    let friend: Friend?
+    let tags: [String]?
+}
+
+struct FavoriteWorld: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    let worldId: String?
+    let world: World?
+    let tags: [String]?
 }

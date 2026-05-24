@@ -1388,79 +1388,348 @@ struct FriendDetailView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.openURL) private var openURL
 
+    @State private var detailedUser: User?
+    @State private var userNote: String?
+    @State private var noteInput: String = ""
+    @State private var isEditingNote = false
+    @State private var isSavingNote = false
+    @State private var isLoadingDetail = false
+    @State private var detailError: String?
+
     private var statusColor: Color {
         FriendStatusColor.color(state: friend.state, status: friend.status)
     }
 
+    private var trustLevel: String {
+        guard let user = detailedUser else { return "User" }
+        switch user.developerType {
+        case "internal": return "VRChat 内部人员"
+        case "moderator": return "管理员"
+        case "trusted": return "受信任用户"
+        case "none": return "新用户"
+        default: return user.tags?.first ?? "User"
+        }
+    }
+
+    private var trustColor: Color {
+        switch detailedUser?.developerType {
+        case "internal":  return .purple
+        case "moderator": return .red
+        case "trusted":   return .blue
+        default:          return .secondary
+        }
+    }
+
     var body: some View {
         ScrollView {
-            VStack(spacing: 20) {
-                AvatarImage(url: friend.userIcon, size: 120)
+            VStack(spacing: 0) {
+                // ── Header ──
+                VStack(spacing: 12) {
+                    AvatarImage(url: friend.userIcon, size: 100)
+                        .padding(.top, 20)
 
-                VStack(spacing: 4) {
-                    Text(friend.displayName ?? friend.username ?? "未知")
-                        .font(.title2.bold())
-
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(statusColor)
-                            .frame(width: 10, height: 10)
-                        Text(FriendStatusColor.label(
-                            state: friend.state,
-                            status: friend.status
-                        ))
-                        .foregroundStyle(.secondary)
+                    VStack(spacing: 4) {
+                        Text(friend.displayName ?? friend.username ?? "未知")
+                            .font(.title2.bold())
+                        Text("@\(friend.username ?? friend.id)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
 
-                    if let statusDesc = friend.statusDescription {
+                    // Status + Trust
+                    HStack(spacing: 12) {
+                        HStack(spacing: 5) {
+                            Circle().fill(statusColor).frame(width: 8, height: 8)
+                            Text(FriendStatusColor.label(state: friend.state, status: friend.status))
+                                .font(.caption)
+                        }
+                        .padding(.horizontal, 10).padding(.vertical, 4)
+                        .background(.quaternary, in: Capsule())
+
+                        HStack(spacing: 5) {
+                            Image(systemName: "checkmark.shield.fill")
+                                .font(.caption2).foregroundStyle(trustColor)
+                            Text(trustLevel).font(.caption)
+                        }
+                        .padding(.horizontal, 10).padding(.vertical, 4)
+                        .background(.quaternary, in: Capsule())
+                    }
+
+                    if let statusDesc = friend.statusDescription, !statusDesc.isEmpty {
                         Text(statusDesc)
-                            .foregroundStyle(.secondary)
+                            .font(.caption).foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
+                            .padding(.horizontal)
                     }
                 }
+                .padding(.bottom, 16)
 
-                // Location info
-                if let location = friend.location, !location.isEmpty, location != "offline" {
-                    Label(location, systemImage: "mappin.and.ellipse")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                Divider().padding(.horizontal)
+
+                // ── Detail Loading ──
+                if isLoadingDetail {
+                    ProgressView("加载详细信息…").padding()
+                } else if let error = detailError {
+                    Text(error).font(.caption).foregroundStyle(.red).padding()
                 }
 
-                // Action: launch VRChat world URL if friend is in a world
-                if let worldID = friend.worldId, !worldID.isEmpty,
-                   let url = VRChatAPIClient.shared.buildWorldLaunchURL(
-                    worldID: worldID,
-                    instanceID: friend.instanceId
-                   ) {
-                    Button {
-                        HapticManager.medium()
-                        openURL(url)
-                    } label: {
-                        Label("在 VRChat 中打开", systemImage: "arrow.up.forward.app")
-                            .frame(maxWidth: .infinity)
+                // ── Location / Current World ──
+                if let loc = friend.location, !loc.isEmpty, loc != "offline", loc != "private" {
+                    VStack(spacing: 8) {
+                        HStack {
+                            Label("当前位置", systemImage: "mappin.and.ellipse")
+                                .font(.subheadline.bold())
+                            Spacer()
+                        }
+
+                        HStack {
+                            Image(systemName: "globe.americas.fill")
+                                .foregroundStyle(.blue)
+                            Text(worldNameHint)
+                                .font(.subheadline)
+                            Spacer()
+                            if let worldID = friend.worldId, !worldID.isEmpty,
+                               let url = VRChatAPIClient.shared.buildWorldLaunchURL(
+                                worldID: worldID, instanceID: friend.instanceId
+                               ) {
+                                Button {
+                                    HapticManager.medium()
+                                    openURL(url)
+                                } label: {
+                                    Label("加入", systemImage: "arrow.right.circle.fill")
+                                        .font(.caption)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+                            }
+                        }
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.regular)
+                    .padding()
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                    .padding(.horizontal)
+                    .padding(.top, 16)
+
+                    Divider().padding(.horizontal).padding(.top, 16)
                 }
 
-                // Bio
+                // ── Bio ──
                 if let bio = friend.bio, !bio.isEmpty {
-                    Divider()
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("简介")
-                            .font(.headline)
-                        Text(bio)
-                            .font(.body)
-                            .foregroundStyle(.secondary)
+                        Label("个人简介", systemImage: "text.quote").font(.subheadline.bold())
+                        Text(bio).font(.body).foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                    .padding(.horizontal).padding(.top, 16)
+
+                    Divider().padding(.horizontal).padding(.top, 16)
                 }
+
+                // ── Social Links ──
+                if let links = detailedUser?.bioLinks, !links.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("社交链接", systemImage: "link").font(.subheadline.bold())
+                        ForEach(links, id: \.self) { link in
+                            HStack {
+                                Image(systemName: "arrow.up.forward.square")
+                                    .font(.caption).foregroundStyle(.blue)
+                                Text(link).font(.caption).foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                    .padding(.horizontal).padding(.top, 16)
+
+                    Divider().padding(.horizontal).padding(.top, 16)
+                }
+
+                // ── Stats Grid ──
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 2)) {
+                    if let joined = detailedUser?.dateJoined {
+                        statCell(icon: "calendar", label: "账号创建", value: formatDate(joined))
+                    }
+                    if let lastLogin = detailedUser?.lastLogin {
+                        statCell(icon: "clock.badge.checkmark", label: "最后登录", value: formatDate(lastLogin))
+                    }
+                    if let lastActivity = detailedUser?.lastActivity {
+                        statCell(icon: "waveform", label: "最后活动", value: formatDate(lastActivity))
+                    }
+                    if let platform = detailedUser?.lastPlatform {
+                        statCell(icon: "desktopcomputer", label: "设备", value: platform)
+                    }
+                }
+                .padding(.horizontal).padding(.top, 16)
+
+                // ── Note ──
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Label("好友备注", systemImage: "note.text").font(.subheadline.bold())
+                        Spacer()
+                        Button(isEditingNote ? "取消" : (userNote != nil ? "编辑" : "添加备注")) {
+                            HapticManager.light()
+                            if isEditingNote {
+                                isEditingNote = false
+                            } else {
+                                noteInput = userNote ?? ""
+                                isEditingNote = true
+                            }
+                        }
+                        .font(.caption)
+                    }
+
+                    if isEditingNote {
+                        HStack(spacing: 8) {
+                            TextField("输入备注…", text: $noteInput)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.subheadline)
+                            Button("保存") {
+                                HapticManager.medium()
+                                isSavingNote = true
+                                Task {
+                                    do {
+                                        try await VRChatAPIClient.shared.updateUserNote(
+                                            userID: friend.id, note: noteInput
+                                        )
+                                        userNote = noteInput.isEmpty ? nil : noteInput
+                                        isEditingNote = false
+                                    } catch {
+                                        detailError = error.localizedDescription
+                                    }
+                                    isSavingNote = false
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                            .disabled(isSavingNote)
+                        }
+                    } else if let note = userNote, !note.isEmpty {
+                        Text(note).font(.body).foregroundStyle(.secondary)
+                    } else {
+                        Text("暂无备注").font(.caption).foregroundStyle(.tertiary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                .padding(.horizontal).padding(.top, 16)
+
+                // ── Actions ──
+                HStack(spacing: 12) {
+                    Button {
+                        HapticManager.medium()
+                        Task {
+                            do {
+                                if friend.isFavorite == true {
+                                    try await VRChatAPIClient.shared.removeFavoriteFriend(userID: friend.id)
+                                } else {
+                                    try await VRChatAPIClient.shared.addFavoriteFriend(userID: friend.id)
+                                }
+                            } catch {
+                                detailError = error.localizedDescription
+                            }
+                        }
+                    } label: {
+                        Label(
+                            friend.isFavorite == true ? "已收藏" : "收藏好友",
+                            systemImage: friend.isFavorite == true ? "star.fill" : "star"
+                        )
+                        .font(.subheadline).frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(friend.isFavorite == true ? .yellow : .secondary)
+
+                    if let worldID = friend.worldId, !worldID.isEmpty,
+                       let url = VRChatAPIClient.shared.buildWorldLaunchURL(
+                        worldID: worldID, instanceID: friend.instanceId
+                       ) {
+                        Button {
+                            HapticManager.medium()
+                            openURL(url)
+                        } label: {
+                            Label("加入世界", systemImage: "arrow.right.circle.fill")
+                                .font(.subheadline).frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+                .padding().padding(.top, 8)
+
+                // ── Player ID ──
+                Text("ID: \(friend.id)")
+                    .font(.caption2).foregroundStyle(.tertiary)
+                    .padding(.bottom, 32)
             }
-            .padding()
-            .frame(maxWidth: .infinity)
         }
         .navigationTitle(friend.displayName ?? "好友详情")
         .navigationBarTitleDisplayMode(.inline)
+        .task {
+            await loadDetails()
+        }
+    }
+
+    private var worldNameHint: String {
+        if let loc = friend.location, loc.hasPrefix("wrld_") {
+            return "世界中"
+        }
+        return friend.location ?? "未知"
+    }
+
+    private func loadDetails() async {
+        isLoadingDetail = true
+        detailError = nil
+        let api = VRChatAPIClient.shared
+
+        async let userResult: () = loadUser(api)
+        async let noteResult: () = loadNote(api)
+
+        _ = await (userResult, noteResult)
+
+        isLoadingDetail = false
+    }
+
+    private func loadUser(_ api: VRChatAPIClient) async {
+        do {
+            detailedUser = try await api.fetchUser(userID: friend.id)
+        } catch {
+            detailError = error.localizedDescription
+        }
+    }
+
+    private func loadNote(_ api: VRChatAPIClient) async {
+        do {
+            let note = try await api.fetchUserNote(userID: friend.id)
+            userNote = note.note
+        } catch {
+            // Notes may not be available or may fail silently
+        }
+    }
+
+    private func statCell(icon: String, label: String, value: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon).foregroundStyle(.secondary).frame(width: 20)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(value).font(.caption).fontWeight(.medium)
+                Text(label).font(.caption2).foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(10)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func formatDate(_ iso: String) -> String {
+        let fmt = ISO8601DateFormatter()
+        fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        guard let date = fmt.date(from: iso) ?? ISO8601DateFormatter().date(from: iso) else {
+            return iso.prefix(10).replacingOccurrences(of: "T", with: " ")
+        }
+        let rel = RelativeDateTimeFormatter()
+        rel.locale = Locale(identifier: "zh_CN")
+        return rel.localizedString(for: date, relativeTo: Date())
     }
 }
 
