@@ -31,12 +31,3 @@ targets:
         CODE_SIGNING_REQUIRED: NO
         CODE_SIGNING_ALLOWED: NO
         TARGETED_DEVICE_FAMILY: "1,2"
-        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-    preBuildScripts:
-      - name: "Generate Asset Catalog (if missing)"
-        script: |
-          if [ ! -d "${SRCROOT}/VRCX-Lite/Assets.xcassets" ]; then
-            echo "Asset catalog missing, creating minimal..."
-            mkdir -p "${SRCROOT}/VRCX-Lite/Assets.xcassets/AppIcon.appiconset"
-          fi
-        basedOnDependencyAnalysis: false
